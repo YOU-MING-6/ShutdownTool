@@ -17,7 +17,7 @@ ShutdownTool — 基于 PySide6 + QFluentWidgets 的定时关机提示工具
     第 2 部分  Utils               — 通用工具函数（含启动音效）
     第 3 部分  SingleInstance      — 保证只运行一个实例
     第 4 部分  ShutdownMessageBox  — 弹窗 UI
-    第 5 部分  CircularIndicator   — 圆形悬浮倒计时
+    第 5 部分  CircularIndicator   — 圆形悬浮倒计时（基于 ProgressRing）
     第 6 部分  MainWindow          — 主控制器
     第 7 部分  main()              — 程序入口
 """
@@ -27,18 +27,18 @@ import sys
 import argparse
 
 from PySide6.QtCore import (
-    Qt, QTimer, QVariantAnimation, QEasingCurve, QPoint, QProcess,
+    Qt, QTimer, QVariantAnimation, QEasingCurve, QPoint, QPointF, QProcess,
     QLockFile, QStandardPaths, Signal, QParallelAnimationGroup,
     QPropertyAnimation, QRectF,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QFont
+from PySide6.QtGui import QColor, QPainter, QFont
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication, QWidget, QGraphicsDropShadowEffect,
     QFrame, QVBoxLayout, QHBoxLayout,
 )
 from qfluentwidgets import (
-    BodyLabel, FluentIcon, PrimaryPushButton, ProgressBar,
+    BodyLabel, FluentIcon, PrimaryPushButton, ProgressBar, ProgressRing,
     PushButton, SubtitleLabel, Theme,
     setTheme, setThemeColor, isDarkTheme,
 )
@@ -53,7 +53,6 @@ from qframelesswindow.utils import getSystemAccentColor
 APP_ID = "shutdowntool"
 APP_NAME = "shutdowntool"
 APP_DESCRIPTION = "定时关机提示工具"
-ICON_FILE = "icon.png"
 SOCKET_NAME = f"{APP_ID}_socket"
 LOCK_FILE = f"{APP_ID}.lock"
 
@@ -78,24 +77,14 @@ INNER_RADIUS = RADIUS - 1
 
 # ---------- 圆形悬浮倒计时 ----------
 CIRCLE_SIZE          = 84       # 整个圆控件的直径
-CIRCLE_RING          = 6        # 圆环线宽
+CIRCLE_RING          = 6        # 圆环线宽（对应 ProgressRing.strokeWidth）
 CIRCLE_MARGIN_RIGHT  = 40       # 默认距屏幕右边的距离
 CIRCLE_MARGIN_BOTTOM = 80       # 默认距屏幕底边的距离
 CIRCLE_FADE_MS       = 220      # 悬浮圆淡入淡出时长
 
-CIRCLE_COLOR_FALLBACK = "#0078D4"   # 拿不到系统强调色时的回退
-
-# 轨道灰底（跟弹窗主题绑定）
-CIRCLE_BG_LIGHT = "#E5E5E5"
-CIRCLE_BG_DARK  = "#3A3A3A"
-
-# 内部填充色（= 窗口纯色）
+# 内部填充色（与弹窗背景色一致）
 CIRCLE_FILL_LIGHT = "#FFFFFF"
 CIRCLE_FILL_DARK  = "#2B2B2B"
-
-# 图标 + 文字色
-CIRCLE_TEXT_LIGHT = "#1A1A1A"
-CIRCLE_TEXT_DARK  = "#FFFFFF"
 
 # ---------- 窗口隐藏 / 显示动画 ----------
 HIDE_ANIM_MS  = 260
@@ -106,16 +95,6 @@ HIDE_SLIDE_PX = 140
 # ══════════════════════════════════════════════════════════════════════════════
 # 第 2 部分：Utils —— 通用工具函数
 # ══════════════════════════════════════════════════════════════════════════════
-
-def resource_path(name: str) -> str:
-    """
-    返回资源文件的绝对路径，兼容开发环境与 PyInstaller 打包后的环境。
-    打包后资源会被解压到 sys._MEIPASS 指向的临时目录；
-    开发环境则直接使用脚本所在目录。
-    """
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, name)
-
 
 def format_time(seconds: int) -> str:
     """把秒数格式化成易读的长字符串（用于弹窗正文）。"""
@@ -449,36 +428,40 @@ class ShutdownMessageBox(QWidget):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 第 5 部分：CircularIndicator —— 圆形悬浮倒计时
+# 第 5 部分：CircularIndicator —— 圆形悬浮倒计时（基于 ProgressRing）
 # ══════════════════════════════════════════════════════════════════════════════
+# 【设计】
+#   直接继承 qfluentwidgets 的 ProgressRing：
+#       · 圆环的描边、圆角端帽、主题色、平滑动画，全部由 ProgressRing 负责
+#       · 圆环颜色自动跟随 setThemeColor()，即系统强调色
+#       · 轨道颜色自动跟随主题（浅色 / 深色）
+#   我们只在它基础上：
+#       · 加一层内部纯色填充（与弹窗背景一致）
+#       · 在中心绘制电源图标 + 剩余时间文字
+#       · 覆盖鼠标事件，实现“拖动 / 单击”
+#
 # 【视觉结构】
 #
 #        ╭───────╮
 #      ╱           ╲
-#     │    ⏻        │   ← 中心：系统电源图标（FluentIcon.POWER_BUTTON）
+#     │    ⏻        │   ← 中心：FluentIcon.POWER_BUTTON
 #     │   3:25      │   ← 中心：剩余时间 mm:ss
 #      ╲           ╱
 #        ╰───────╯
 #       ↑         ↑
 #       |         └── 剩余部分：系统强调色，从顶部顺时针
-#       └──────────── 轨道：跟主题绑定的灰
-#
-# 内部填充 = 弹窗纯色（浅色 #FFFFFF / 深色 #2B2B2B）
+#       └──────────── 轨道：跟随主题的灰
 #
 # 交互：
 #   · 拖动 → 移动位置
 #   · 单击（未移动）→ 发出 clicked 信号
-#   · 悬停 → 圆环略提亮
 #
 # ──────────────────────────────────────────────────────────────────────────────
 
-class CircularIndicator(QWidget):
+class CircularIndicator(ProgressRing):
     """
-    圆形悬浮倒计时控件。
-    · 圆环进度 = 剩余时间 / 总时间，从顶部顺时针
-    · 中心显示电源图标 + 剩余时间
-    · 可拖动，可点击
-    · 颜色：启动时快照一次（跟弹窗主题一致）
+    圆形悬浮倒计时。
+    继承 qfluentwidgets.ProgressRing，复用其圆环渲染、主题色、平滑动画。
     """
 
     clicked = Signal()
@@ -486,54 +469,44 @@ class CircularIndicator(QWidget):
     def __init__(self) -> None:
         super().__init__()
 
-        # 无边框 / 置顶 / 不抢焦点、不进任务栏
+        # ---- 窗口标志：置顶 / 无边框 / 不抢焦点 ----
         self.setWindowFlags(
             Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
 
+        # ---- 尺寸与外观 ----
         self.setFixedSize(CIRCLE_SIZE, CIRCLE_SIZE)
+        self.setStrokeWidth(CIRCLE_RING)
+        self.setTextVisible(False)                 # 隐藏默认的百分比文字
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("点击重新显示关机提示，拖动可移动位置")
 
-        # ---- 启动时快照颜色（不随主题实时变化）----
+        # ---- 主题相关（启动时快照一次）----
         dark = isDarkTheme()
-        accent = getSystemAccentColor()
-        self._accent = accent if accent.isValid() else QColor(CIRCLE_COLOR_FALLBACK)
-        self._ring_bg = QColor(CIRCLE_BG_DARK if dark else CIRCLE_BG_LIGHT)
-        self._fill_color = QColor(
-            CIRCLE_FILL_DARK if dark else CIRCLE_FILL_LIGHT
-        )
-        self._fg_color = QColor(
-            CIRCLE_TEXT_DARK if dark else CIRCLE_TEXT_LIGHT
-        )
-
-        # ---- 中心图标：用 qfluentwidgets 现成的电源图标 ----
-        # 取一次 QIcon 缓存起来，避免每帧重建
+        self._fill_color = QColor(CIRCLE_FILL_DARK if dark else CIRCLE_FILL_LIGHT)
+        self._fg_color = QColor("#FFFFFF" if dark else "#000000")
         self._icon = FluentIcon.POWER_BUTTON.icon(
-            theme=Theme.DARK if dark else Theme.LIGHT,
-            color=self._fg_color,
+            Theme.DARK if dark else Theme.LIGHT
         )
 
         # ---- 状态 ----
-        self._progress = 1.0            # 剩余比例：1.0 = 满，0.0 = 空
         self._remaining_text = "0:00"
-        self._hover = False
 
-        # ---- 拖动相关 ----
+        # ---- 拖动状态 ----
         self._press_global = None       # 按下时光标的全局坐标
         self._drag_offset = None        # 光标相对控件左上角的偏移
         self._moved = False             # 本次按下是否产生过拖动
 
     # ---------- 对外接口 ----------
     def set_progress(self, ratio: float) -> None:
-        """ratio = 剩余时间 / 总时间，0.0 ~ 1.0。"""
+        """ratio = 剩余时间 / 总时间，0.0 ~ 1.0（内部转换为 0~100）。"""
         ratio = max(0.0, min(1.0, ratio))
-        if abs(ratio - self._progress) < 1e-4:
+        v = int(round(ratio * 100))
+        if self.value() == v:
             return
-        self._progress = ratio
-        self.update()
+        self.setValue(v)                # ProgressRing 会平滑过渡
 
     def set_remaining(self, seconds: int) -> None:
         """更新中心显示的剩余时间文本。"""
@@ -544,16 +517,6 @@ class CircularIndicator(QWidget):
         self.update()
 
     # ---------- 交互 ----------
-    def enterEvent(self, event):
-        self._hover = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-        super().leaveEvent(event)
-
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self._press_global = event.globalPosition().toPoint()
@@ -566,7 +529,6 @@ class CircularIndicator(QWidget):
     def mouseMoveEvent(self, event):
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
             now = event.globalPosition().toPoint()
-            # 移动距离超过 4px 才算拖动，避免“手抖”误判点击
             if (now - self._press_global).manhattanLength() > 4:
                 self._moved = True
             self.move(now - self._drag_offset)
@@ -574,7 +536,6 @@ class CircularIndicator(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # 未曾拖动 → 视为单击
             if not self._moved:
                 self.clicked.emit()
             self._press_global = None
@@ -584,64 +545,42 @@ class CircularIndicator(QWidget):
 
     # ---------- 绘制 ----------
     def paintEvent(self, event):
+        # 1) 内部填充：一个跟弹窗背景同色的实心圆
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        p.setBrush(self._fill_color)
+        r = (self.width() - 2 * CIRCLE_RING) / 2.0
+        p.drawEllipse(
+            QPointF(self.width() / 2.0, self.height() / 2.0), r, r
+        )
+        p.end()
+
+        # 2) 圆环（ProgressRing 全权负责：主题色 + 轨道色 + 平滑动画）
+        super().paintEvent(event)
+
+        # 3) 中心图标 + 剩余时间文字
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
 
         w, h = self.width(), self.height()
-        rw = CIRCLE_RING
-
-        # 圆环外接矩形：向内收缩半个线宽，让描边完全落在控件内
-        ring_rect = QRectF(
-            rw / 2, rw / 2,
-            w - rw, h - rw,
-        )
-
-        # ── 1) 内部填充：纯色圆（= 弹窗背景色）───────────────
-        inner_rect = QRectF(
-            rw, rw,
-            w - 2 * rw, h - 2 * rw,
-        )
-        p.setPen(Qt.NoPen)
-        p.setBrush(self._fill_color)
-        p.drawEllipse(inner_rect)
-
-        # ── 2) 轨道（灰底圆环，整圈）──────────────────────────
-        bg_pen = QPen(self._ring_bg, rw)
-        bg_pen.setCapStyle(Qt.RoundCap)
-        p.setPen(bg_pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawArc(ring_rect, 0, 360 * 16)
-
-        # ── 3) 进度（系统强调色，从顶部顺时针画 progress×360°）──
-        if self._progress > 0:
-            accent = QColor(self._accent)
-            if self._hover:
-                accent = accent.lighter(115)
-            fg_pen = QPen(accent, rw)
-            fg_pen.setCapStyle(Qt.RoundCap)
-            p.setPen(fg_pen)
-            # Qt 里角度以 3 点钟方向为 0°、逆时针为正
-            # 90° = 12 点钟方向；负的 sweep 表示顺时针
-            p.drawArc(
-                ring_rect,
-                90 * 16,
-                -int(360 * 16 * self._progress),
-            )
-
-        # ── 4) 中心图标（qfluentwidgets 的电源图标）────────────
-        icon_size = int(w * 0.34)
+        icon_size = int(w * 0.30)
         icon_x = (w - icon_size) // 2
-        icon_y = int(h * 0.20)
+        icon_y = int(h * 0.24)
         self._icon.paint(p, icon_x, icon_y, icon_size, icon_size)
 
-        # ── 5) 中心剩余时间文字 ────────────────────────────────
         p.setPen(self._fg_color)
         f = QFont(self.font())
         f.setPointSize(9)
         f.setBold(True)
         p.setFont(f)
-        text_rect = QRectF(0, icon_y + icon_size - 2, w, 18)
-        p.drawText(text_rect, Qt.AlignHCenter | Qt.AlignTop, self._remaining_text)
+        text_rect = QRectF(0, icon_y + icon_size - 2, w, 20)
+        p.drawText(
+            text_rect,
+            Qt.AlignHCenter | Qt.AlignTop,
+            self._remaining_text,
+        )
+        p.end()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -665,8 +604,6 @@ class MainWindow(QWidget):
         self._circle_placed = False      # 悬浮圆是否已经放到默认位置
 
         # ---- 宿主窗口（不可见）----
-        self.setWindowTitle(APP_NAME)
-        self.setWindowIcon(QIcon(resource_path(ICON_FILE)))
         self.setWindowFlags(Qt.Tool)
         self.resize(1, 1)
 
