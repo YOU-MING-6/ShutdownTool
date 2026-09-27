@@ -7,7 +7,7 @@ ShutdownTool — 基于 PySide6 + QFluentWidgets 的定时关机提示工具
         · 点“已阅”        → 窗口向下淡出，倒计时继续；右下角出现圆形悬浮倒计时
         · 点“延迟 1 分钟” → 倒计时 +60 秒，窗口不关闭
         · 点“立即关机”    → 立即执行关机
-        · 点“取消关机计划” → 撤销关机，退出程序
+        · 点“取消关机计划” → 撤销关机，窗口向下淡出后退出
         · 点圆形悬浮倒计时 → 重新显示窗口
         · 拖动圆形悬浮倒计时 → 可移动到屏幕任意位置
 
@@ -349,7 +349,7 @@ class ShutdownMessageBox(QWidget):
             self.total = total
 
         self.contentLabel.setText(
-            f"当前为放学时段；计算机将在 {format_time(self.remaining)}后自动关闭。"
+            f"当前已到放学时段；计算机将在 {format_time(self.remaining)}后自动关闭。"
         )
         self._animate_progress(self._target_progress())
 
@@ -391,22 +391,6 @@ class ShutdownMessageBox(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 # 第 5 部分：CircularIndicator —— 圆形悬浮倒计时
 # ══════════════════════════════════════════════════════════════════════════════
-# 【布局设计】
-#
-#   ┌─────────────────────┐
-#   │       ╭────╮         │  ← 圆环外缘
-#   │     ╱        ╲       │
-#   │    │   ⏻     │       │  ← 图标：居中偏上，尺寸约 26% 直径
-#   │    │         │       │     图标与下方文字间距很小，视觉上是一组
-#   │    │  3:25   │       │  ← 时间：9pt 加粗，紧贴图标下方
-#   │     ╲        ╱       │
-#   │       ╰────╯         │
-#   └─────────────────────┘
-#
-#   整体（图标 + 文字）在圆内垂直居中，视觉重心略偏上。
-#   图标与文字之间的间距由 ICON_TEXT_GAP 控制。
-#
-# ──────────────────────────────────────────────────────────────────────────────
 
 class CircularIndicator(ProgressRing):
     """
@@ -421,7 +405,7 @@ class CircularIndicator(ProgressRing):
     clicked = Signal()
 
     # ---- 中心布局参数（相对于控件直径的比例）----
-    ICON_RATIO      = 0.30      # 图标大小 ÷ 直径
+    ICON_RATIO      = 0.20      # 图标大小 ÷ 直径
     ICON_TEXT_GAP   = 4         # 图标与文字之间的间距（像素）
     TEXT_FONT_SIZE  = 10        # 时间文字字号
     TEXT_HEIGHT     = 16        # 时间文字占用的高度（像素）
@@ -513,24 +497,20 @@ class CircularIndicator(ProgressRing):
         # 2) 圆环（ProgressRing 全权负责）
         super().paintEvent(event)
 
-        # 3) 中心图标 + 时间文字（整体在圆内垂直居中，略偏上）
+        # 3) 中心图标 + 时间文字（整组在圆内垂直居中，略偏上）
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
 
         w, h = self.width(), self.height()
 
-        # 图标尺寸
         icon_size = int(w * self.ICON_RATIO)
-        # 整组（图标 + 间距 + 文字）的总高
         block_h = icon_size + self.ICON_TEXT_GAP + self.TEXT_HEIGHT
-        # 整组在圆内垂直居中（加上视觉偏移）
         block_top = (h - block_h) // 2 + self.VISUAL_Y_BIAS
 
         icon_x = (w - icon_size) // 2
         icon_y = block_top
         self._icon.paint(p, icon_x, icon_y, icon_size, icon_size)
 
-        # 时间文字
         p.setPen(self._fg_color)
         f = QFont(self.font())
         f.setPointSize(self.TEXT_FONT_SIZE)
@@ -639,7 +619,6 @@ class MainWindow(QWidget):
             center_on_screen(self.message_box)
             self._saved_pos = self.message_box.pos()
 
-        # 起点：比目标位置低 HIDE_SLIDE_PX 像素
         start_pos = self._saved_pos + QPoint(0, HIDE_SLIDE_PX)
 
         self.message_box.move(start_pos)
@@ -671,14 +650,18 @@ class MainWindow(QWidget):
         self.message_box.setWindowOpacity(1.0)
         self._anim_state = "idle"
 
-    def _animate_hide(self) -> None:
-        """弹窗向下滑出 + 淡出；结束后显示悬浮圆。"""
+    def _animate_hide(self, show_circle: bool = True) -> None:
+        """
+        弹窗向下滑出 + 淡出。
+
+        show_circle=True  → 结束后显示悬浮圆（用于“已阅”）
+        show_circle=False → 结束后直接退出程序（用于“取消关机计划”）
+        """
         if self._anim_state != "idle":
             return
         self._anim_state = "hiding"
         self._saved_pos = self.message_box.pos()
 
-        # 终点：比原位置低 HIDE_SLIDE_PX 像素
         end_pos = self._saved_pos + QPoint(0, HIDE_SLIDE_PX)
 
         self._hide_group = QParallelAnimationGroup(self)
@@ -697,15 +680,24 @@ class MainWindow(QWidget):
 
         self._hide_group.addAnimation(a_pos)
         self._hide_group.addAnimation(a_op)
-        self._hide_group.finished.connect(self._on_hide_done)
+        # 用 lambda 携带 show_circle 参数，交给 _on_hide_done 处理
+        self._hide_group.finished.connect(
+            lambda: self._on_hide_done(show_circle)
+        )
         self._hide_group.start()
 
-    def _on_hide_done(self) -> None:
+    def _on_hide_done(self, show_circle: bool = True) -> None:
         self.message_box.hide()
         self.message_box.setWindowOpacity(1.0)
         self.message_box.move(self._saved_pos)   # 静默复位
         self._anim_state = "idle"
-        self._show_circular()
+
+        if show_circle:
+            # “已阅” → 显示悬浮圆
+            self._show_circular()
+        else:
+            # “取消关机计划” → 稍等一会再退出，避免动画过于突兀
+            QTimer.singleShot(CLOSE_DELAY_MS, self._quit)
 
     # ──────────────────────────────────────────────────────────────────────
     # 悬浮圆：定位、出现、消失
@@ -797,23 +789,25 @@ class MainWindow(QWidget):
     # 按钮回调
     # ──────────────────────────────────────────────────────────────────────
     def on_accept(self) -> None:
-        """“已阅”：向下隐藏窗口，倒计时继续，右下角出现悬浮圆。"""
-        self._animate_hide()
+        """“已阅”：窗口向下淡出，倒计时继续，右下角出现悬浮圆。"""
+        self._animate_hide(show_circle=True)
 
     def on_delay_clicked(self) -> None:
+        """“延迟 1 分钟”：剩余时间和总时间都 +DELAY_S，窗口保持显示。"""
         self.remaining += DELAY_S
         self.total += DELAY_S
         self._refresh_ui()
 
     def on_shutdown_now(self) -> None:
+        """“立即关机”：停止倒计时，延迟几秒后关机。"""
         self.timer.stop()
         shutdown_now(SHUTDOWN_BUFFER_S)
 
     def cancel_shutdown(self) -> None:
+        """“取消关机计划”：撤销系统关机命令，窗口向下淡出后退出程序。"""
         cancel_shutdown()
-        self.message_box.close()
-        self.circular.close()
-        QTimer.singleShot(CLOSE_DELAY_MS, self._quit)
+        self.timer.stop()
+        self._animate_hide(show_circle=False)
 
     # ──────────────────────────────────────────────────────────────────────
     # 退出清理
@@ -832,6 +826,7 @@ class MainWindow(QWidget):
 
 def main() -> None:
     """程序主入口。"""
+    # ---- 1. 解析命令行参数 ----
     parser = argparse.ArgumentParser(description=APP_DESCRIPTION)
     parser.add_argument(
         "--countdown",
@@ -844,16 +839,23 @@ def main() -> None:
         print("错误：--countdown 必须为大于 0 的整数")
         sys.exit(1)
 
+    # ---- 2. 创建 QApplication ----
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # ---- 3. 单实例检查 ----
     si = SingleInstance()
     if not si.acquire():
         si.notify_show()
         sys.exit(0)
 
+    # ---- 4. 创建主窗口 ----
     window = MainWindow(args.countdown, si)
+
+    # ---- 5. 播放启动音效 ----
     play_startup_sound()
+
+    # ---- 6. 进入事件循环 ----
     sys.exit(app.exec())
 
 
