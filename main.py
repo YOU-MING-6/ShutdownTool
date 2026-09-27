@@ -74,7 +74,7 @@ class AppMeta:
     DESCRIPTION: Final = "定时关机提示工具"
     SOCKET_NAME: Final = f"{ID}_socket"
     LOCK_FILE: Final = f"{ID}.lock"
-    DEFAULT_COUNTDOWN: Final = 60
+    DEFAULT_COUNTDOWN: Final = 500
 
 
 class Timing:
@@ -393,7 +393,7 @@ class ShutdownDialog(QWidget):
             self.total = total
 
         self.content_label.setText(
-            f"本节课课程为自习；计算机将在 "
+            f"下节课程为户外课程；计算机将在 "
             f"{format_duration(self.remaining)}后自动关闭。"
         )
         self._animate_progress(self._target_progress())
