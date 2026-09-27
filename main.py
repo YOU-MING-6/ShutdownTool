@@ -10,7 +10,7 @@ ShutdownTool — 基于 PySide6 + QFluentWidgets 的定时关机提示工具
         · 点“取消关机计划” → 撤销关机，退出程序
         · 点圆形悬浮倒计时 → 重新显示窗口
         · 拖动圆形悬浮倒计时 → 可移动到屏幕任意位置
-    窗口隐藏时向右滑动 + 淡出，把视线引向右侧；显示时反向滑入。
+    窗口隐藏时向右滑动 + 淡出；显示时反向滑入。
 
 【代码结构】
     第 1 部分  Config              — 所有可调参数集中在此
@@ -27,7 +27,7 @@ import sys
 import argparse
 
 from PySide6.QtCore import (
-    Qt, QTimer, QVariantAnimation, QEasingCurve, QPoint, QPointF, QProcess,
+    Qt, QTimer, QVariantAnimation, QEasingCurve, QPoint, QProcess,
     QLockFile, QStandardPaths, Signal, QParallelAnimationGroup,
     QPropertyAnimation, QRectF,
 )
@@ -77,17 +77,25 @@ RADIUS = 8
 INNER_RADIUS = RADIUS - 1
 
 # ---------- 圆形悬浮倒计时 ----------
-CIRCLE_SIZE          = 120      # 整个圆控件的直径
-CIRCLE_RING          = 8        # 圆环线宽
+CIRCLE_SIZE          = 84       # 整个圆控件的直径
+CIRCLE_RING          = 6        # 圆环线宽
 CIRCLE_MARGIN_RIGHT  = 40       # 默认距屏幕右边的距离
 CIRCLE_MARGIN_BOTTOM = 80       # 默认距屏幕底边的距离
 CIRCLE_FADE_MS       = 220      # 悬浮圆淡入淡出时长
 
 CIRCLE_COLOR_FALLBACK = "#0078D4"   # 拿不到系统强调色时的回退
-CIRCLE_BG_LIGHT       = "#E5E5E5"   # 浅色主题：轨道灰
-CIRCLE_BG_DARK        = "#3A3A3A"   # 深色主题：轨道灰
-CIRCLE_TEXT_LIGHT     = "#1A1A1A"   # 浅色主题：中心图标 + 文字色
-CIRCLE_TEXT_DARK      = "#FFFFFF"   # 深色主题：中心图标 + 文字色
+
+# 轨道灰底（跟弹窗主题绑定）
+CIRCLE_BG_LIGHT = "#E5E5E5"
+CIRCLE_BG_DARK  = "#3A3A3A"
+
+# 内部填充色（= 窗口纯色）
+CIRCLE_FILL_LIGHT = "#FFFFFF"
+CIRCLE_FILL_DARK  = "#2B2B2B"
+
+# 图标 + 文字色
+CIRCLE_TEXT_LIGHT = "#1A1A1A"
+CIRCLE_TEXT_DARK  = "#FFFFFF"
 
 # ---------- 窗口隐藏 / 显示动画 ----------
 HIDE_ANIM_MS  = 260
@@ -447,14 +455,15 @@ class ShutdownMessageBox(QWidget):
 #
 #        ╭───────╮
 #      ╱           ╲
-#     │    ⏻        │   ← 中心：电源图标
+#     │    ⏻        │   ← 中心：系统电源图标（FluentIcon.POWER_BUTTON）
 #     │   3:25      │   ← 中心：剩余时间 mm:ss
 #      ╲           ╱
 #        ╰───────╯
 #       ↑         ↑
-#       |         |
 #       |         └── 剩余部分：系统强调色，从顶部顺时针
 #       └──────────── 轨道：跟主题绑定的灰
+#
+# 内部填充 = 弹窗纯色（浅色 #FFFFFF / 深色 #2B2B2B）
 #
 # 交互：
 #   · 拖动 → 移动位置
@@ -489,13 +498,22 @@ class CircularIndicator(QWidget):
         self.setToolTip("点击重新显示关机提示，拖动可移动位置")
 
         # ---- 启动时快照颜色（不随主题实时变化）----
+        dark = isDarkTheme()
         accent = getSystemAccentColor()
         self._accent = accent if accent.isValid() else QColor(CIRCLE_COLOR_FALLBACK)
-        self._ring_bg = QColor(
-            CIRCLE_BG_DARK if isDarkTheme() else CIRCLE_BG_LIGHT
+        self._ring_bg = QColor(CIRCLE_BG_DARK if dark else CIRCLE_BG_LIGHT)
+        self._fill_color = QColor(
+            CIRCLE_FILL_DARK if dark else CIRCLE_FILL_LIGHT
         )
         self._fg_color = QColor(
-            CIRCLE_TEXT_DARK if isDarkTheme() else CIRCLE_TEXT_LIGHT
+            CIRCLE_TEXT_DARK if dark else CIRCLE_TEXT_LIGHT
+        )
+
+        # ---- 中心图标：用 qfluentwidgets 现成的电源图标 ----
+        # 取一次 QIcon 缓存起来，避免每帧重建
+        self._icon = FluentIcon.POWER_BUTTON.icon(
+            theme=Theme.DARK if dark else Theme.LIGHT,
+            color=self._fg_color,
         )
 
         # ---- 状态 ----
@@ -578,14 +596,23 @@ class CircularIndicator(QWidget):
             w - rw, h - rw,
         )
 
-        # ── 1) 轨道（灰底圆环，整圈）──────────────────────────
+        # ── 1) 内部填充：纯色圆（= 弹窗背景色）───────────────
+        inner_rect = QRectF(
+            rw, rw,
+            w - 2 * rw, h - 2 * rw,
+        )
+        p.setPen(Qt.NoPen)
+        p.setBrush(self._fill_color)
+        p.drawEllipse(inner_rect)
+
+        # ── 2) 轨道（灰底圆环，整圈）──────────────────────────
         bg_pen = QPen(self._ring_bg, rw)
         bg_pen.setCapStyle(Qt.RoundCap)
         p.setPen(bg_pen)
         p.setBrush(Qt.NoBrush)
         p.drawArc(ring_rect, 0, 360 * 16)
 
-        # ── 2) 进度（系统强调色，从顶部顺时针画 progress×360°）──
+        # ── 3) 进度（系统强调色，从顶部顺时针画 progress×360°）──
         if self._progress > 0:
             accent = QColor(self._accent)
             if self._hover:
@@ -601,35 +628,19 @@ class CircularIndicator(QWidget):
                 -int(360 * 16 * self._progress),
             )
 
-        # ── 3) 中心电源图标 ────────────────────────────────────
-        cx, cy = w / 2.0, h / 2.0
-        icon_pen = QPen(self._fg_color, 2.6)
-        icon_pen.setCapStyle(Qt.RoundCap)
-        p.setPen(icon_pen)
-        p.setBrush(Qt.NoBrush)
+        # ── 4) 中心图标（qfluentwidgets 的电源图标）────────────
+        icon_size = int(w * 0.34)
+        icon_x = (w - icon_size) // 2
+        icon_y = int(h * 0.20)
+        self._icon.paint(p, icon_x, icon_y, icon_size, icon_size)
 
-        # 竖线：从 (cx, cy-15) 到 (cx, cy-5)
-        p.drawLine(
-            QPointF(cx, cy - 15),
-            QPointF(cx, cy - 5),
-        )
-        # 缺口感在顶部的圆弧
-        arc_r = 11.0
-        arc_rect = QRectF(
-            cx - arc_r, cy - arc_r + 2,
-            arc_r * 2, arc_r * 2,
-        )
-        # 从 60° 逆时针扫 240° → 缺口在 60°~120°（顶部）
-        p.drawArc(arc_rect, 60 * 16, 240 * 16)
-
-        # ── 4) 中心剩余时间文字 ────────────────────────────────
+        # ── 5) 中心剩余时间文字 ────────────────────────────────
         p.setPen(self._fg_color)
         f = QFont(self.font())
-        f.setPointSize(10)
+        f.setPointSize(9)
         f.setBold(True)
         p.setFont(f)
-
-        text_rect = QRectF(0, cy + 8, w, 22)
+        text_rect = QRectF(0, icon_y + icon_size - 2, w, 18)
         p.drawText(text_rect, Qt.AlignHCenter | Qt.AlignTop, self._remaining_text)
 
 
