@@ -4,22 +4,18 @@ ShutdownTool — 基于 PySide6 + QFluentWidgets 的定时关机提示工具
 【这个程序是做什么的？】
     启动后，屏幕中央会弹出一个窗口，提示“计算机将在 XX 后自动关闭”。
     用户可以：
-        · 点“已阅”        → 窗口滑出屏幕，倒计时继续；右侧边缘出现竖向进度条
+        · 点“已阅”        → 关闭窗口，倒计时继续
         · 点“延迟 1 分钟” → 倒计时 +60 秒，窗口不关闭
         · 点“立即关机”    → 立即执行关机
         · 点“取消关机计划” → 撤销关机，退出程序
-        · 点右侧边缘进度条 → 重新显示窗口
-    隐藏窗口时有向右滑动 + 淡出动画，把视线引导到右侧边缘；
-    显示窗口时有从右滑入 + 淡入动画。
 
 【代码结构】
     第 1 部分  Config           — 所有可调参数集中在此
     第 2 部分  Utils            — 通用工具函数（含启动音效）
     第 3 部分  SingleInstance   — 保证只运行一个实例
     第 4 部分  ShutdownMessageBox — 弹窗 UI
-    第 5 部分  EdgeIndicator    — 屏幕右边缘竖向进度条
-    第 6 部分  MainWindow       — 主控制器
-    第 7 部分  main()           — 程序入口
+    第 5 部分  MainWindow       — 主控制器
+    第 6 部分  main()           — 程序入口
 """
 
 import os
@@ -27,11 +23,10 @@ import sys
 import argparse
 
 from PySide6.QtCore import (
-    Qt, QTimer, QVariantAnimation, QEasingCurve, QPoint, QProcess,
-    QLockFile, QStandardPaths, Signal, QParallelAnimationGroup,
-    QPropertyAnimation, QRectF,
+    Qt, QTimer, QVariantAnimation, QEasingCurve, QProcess,
+    QLockFile, QStandardPaths,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication, QWidget, QGraphicsDropShadowEffect,
@@ -75,23 +70,6 @@ SHADOW_COLOR = QColor(0, 0, 0, 90)
 # ---------- 视觉细节 ----------
 RADIUS = 8
 INNER_RADIUS = RADIUS - 1
-
-# ---------- 边缘指示条 ----------
-EDGE_WIDTH      = 10          # 条宽（像素）
-EDGE_HEIGHT     = 340        # 条高
-EDGE_ANIM_MS    = 220        # 淡入淡出动画时长
-
-# 系统色拿不到时的回退强调色
-EDGE_COLOR_FALLBACK = "#0078D4"
-
-# “未走过 / 剩余”部分的底色 —— 跟主题绑定
-EDGE_REST_LIGHT = "#E5E5E5"  # 浅色主题：浅灰
-EDGE_REST_DARK  = "#4A4A4A"  # 深色主题：深灰
-
-# ---------- 窗口隐藏 / 显示动画 ----------
-HIDE_ANIM_MS = 260
-SHOW_ANIM_MS = 260
-HIDE_SLIDE_PX = 140
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -148,7 +126,7 @@ def center_on_screen(widget: QWidget) -> None:
 
 def play_startup_sound() -> None:
     """
-    程序成功启动后播放 Windows 11 的 UAC 提示音。
+    程序成功启动后播放 Windows 的提示音。
     非 Windows 平台静默返回，播放失败也不抛异常（不影响主流程）。
     """
     if sys.platform != "win32":
@@ -158,7 +136,7 @@ def play_startup_sound() -> None:
     except ImportError:
         return
 
-    # 1) 优先播放系统自带的 UAC 声音文件
+    # 1) 优先播放系统自带的提示音文件
     media_dir = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Media")
     for name in (
         "Windows Background.wav",
@@ -437,126 +415,12 @@ class ShutdownMessageBox(QWidget):
         super().mouseReleaseEvent(event)
 
 
-class EdgeIndicator(QWidget):
-    """
-    贴在屏幕右边缘的竖向进度条。
-
-    视觉（浅色 / 深色主题都成立）：
-        ┌──┐
-        │  │ ← 顶部圆角
-        │  │
-        │  │ ← “剩余”底灰：浅色 → #E5E5E5，深色 → #4A4A4A
-        │  │   启动时按当前主题定一次，运行中不再变化
-        ├──┤ ← 分界线（无描边，仅颜色差）
-        │  │
-        │  │
-        │  │ ← “剩余”高亮：系统强调色（同样启动时缓存）
-        │  │   高度 = 剩余比例 × 条高
-        │  │   剩余 100% → 整条，剩余 0% → 整条变灰
-        │  │
-        └──┘ ← 底部圆角
-              ↑
-        右侧齐平，紧贴屏幕边缘
-
-    行为：
-        · set_progress(剩余比例) → 重绘
-        · 单击 → clicked 信号
-        · 悬停 → 系统色略微提亮
-    """
-
-    clicked = Signal()
-
-    def __init__(self) -> None:
-        super().__init__()
-
-        # 无边框 / 置顶 / 不抢焦点、不进任务栏
-        self.setWindowFlags(
-            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-
-        # 尺寸 —— 宽度由 Config.EDGE_WIDTH 决定
-        self.setFixedSize(EDGE_WIDTH, EDGE_HEIGHT)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("点击重新显示关机提示")
-
-        # 1) 系统强调色（Linux 上可能无效，需要回退）
-        accent = getSystemAccentColor()
-        self._accent = accent if accent.isValid() else QColor(EDGE_COLOR_FALLBACK)
-
-        # 2) 未走过部分的底色，按当前主题取一次
-        self._rest_color = QColor(
-            EDGE_REST_DARK if isDarkTheme() else EDGE_REST_LIGHT
-        )
-
-        # 状态
-        self._progress = 1.0        # 剩余比例：1.0 = 满，0.0 = 空
-        self._hover = False
-
-    # ---------- 对外接口 ----------
-    def set_progress(self, ratio: float) -> None:
-        """ratio = 剩余时间 / 总时间，0.0 ~ 1.0。"""
-        ratio = max(0.0, min(1.0, ratio))
-        if abs(ratio - self._progress) < 1e-4:
-            return
-        self._progress = ratio
-        self.update()
-
-    # ---------- 交互 ----------
-    def enterEvent(self, event):
-        self._hover = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._hover = False
-        self.update()
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-    # ---------- 绘制 ----------
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-
-        w, h = self.width(), self.height()
-        radius = w / 2.0
-
-        # ── 1. 裁剪成“仅左侧圆角”的形状 ──────────────────────────
-        path = QPainterPath()
-        path.moveTo(w, 0)
-        path.lineTo(radius, 0)
-        path.arcTo(0, 0, 2 * radius, 2 * radius, 90, 90)
-        path.lineTo(0, h - radius)
-        path.arcTo(0, h - 2 * radius,
-                   2 * radius, 2 * radius, 180, 90)
-        path.lineTo(w, h)
-        path.closeSubpath()
-        p.setClipPath(path)
-
-        # ── 2. 铺底：启动时缓存的灰（不随主题实时变化）──────────
-        p.fillRect(0, 0, w, h, self._rest_color)
-
-        # ── 3. 高亮：系统色，从底部向上撑起，高度 = progress × h ─
-        if self._progress > 0:
-            fill_h = h * self._progress
-            accent = QColor(self._accent)
-            if self._hover:
-                accent = accent.lighter(115)
-            p.fillRect(QRectF(0, h - fill_h, w, fill_h), accent)
-
-
 # ══════════════════════════════════════════════════════════════════════════════
-# 第 6 部分：MainWindow —— 主控制器
+# 第 5 部分：MainWindow —— 主控制器
 # ══════════════════════════════════════════════════════════════════════════════
 
 class MainWindow(QWidget):
-    """整个程序的中枢：串联对话框、边缘条、定时器、单实例。"""
+    """整个程序的中枢：串联对话框、定时器、单实例。"""
 
     def __init__(self, countdown: int, single_instance: SingleInstance) -> None:
         super().__init__()
@@ -564,11 +428,7 @@ class MainWindow(QWidget):
         self._si = single_instance
         self.remaining = countdown
         self.total = countdown
-        self._saved_pos = None           # 记住窗口“正常显示”时的位置
-        self._anim_state = "idle"        # idle / showing / hiding
-        self._show_group = None
-        self._hide_group = None
-        self._edge_anim = None
+        self._centered = False
 
         # ---- 宿主窗口（不可见）----
         self.setWindowTitle(APP_NAME)
@@ -581,7 +441,6 @@ class MainWindow(QWidget):
 
         # ---- UI 组件 ----
         self._setup_message_box(countdown)
-        self._setup_edge_indicator()
         self._setup_single_instance_server()
         self._setup_timer()
 
@@ -608,12 +467,6 @@ class MainWindow(QWidget):
         self.message_box.delay_btn.clicked.connect(self.on_delay_clicked)
         self.message_box.cancel_btn.clicked.connect(self.cancel_shutdown)
 
-    def _setup_edge_indicator(self) -> None:
-        """创建右边缘进度条，点击它可重新显示窗口。"""
-        self.edge_indicator = EdgeIndicator()
-        self.edge_indicator.clicked.connect(self.show_reminder)
-        self.edge_indicator.hide()
-
     def _setup_single_instance_server(self) -> None:
         """启动本地 socket 服务，接收其他实例的唤醒请求。"""
         self.server = QLocalServer(self)
@@ -628,145 +481,20 @@ class MainWindow(QWidget):
         self.timer.start(TICK_MS)
 
     # ──────────────────────────────────────────────────────────────────────
-    # 显示窗口
+    # 显示 / 隐藏窗口（使用系统默认的淡入淡出效果）
     # ──────────────────────────────────────────────────────────────────────
     def show_reminder(self) -> None:
-        """显示并置顶对话框（带从右滑入 + 淡入动画）。"""
-        if self._anim_state == "showing":
-            return
-        if self.message_box.isVisible() and self._anim_state == "idle":
-            self.message_box.raise_()
-            self.message_box.activateWindow()
-            return
-        self._animate_show()
-
-    # ──────────────────────────────────────────────────────────────────────
-    # 显示 / 隐藏动画
-    # ──────────────────────────────────────────────────────────────────────
-    def _animate_show(self) -> None:
-        self._anim_state = "showing"
-        self._hide_edge_indicator()
-
-        if self._saved_pos is None:
+        """显示并置顶对话框。首次显示时会先居中。"""
+        if not self._centered:
             center_on_screen(self.message_box)
-            self._saved_pos = self.message_box.pos()
-
-        start_pos = self._saved_pos + QPoint(HIDE_SLIDE_PX, 0)
-
-        self.message_box.move(start_pos)
-        self.message_box.setWindowOpacity(0.0)
+            self._centered = True
         self.message_box.show()
         self.message_box.raise_()
         self.message_box.activateWindow()
 
-        self._show_group = QParallelAnimationGroup(self)
-
-        a_pos = QPropertyAnimation(self.message_box, b"pos", self)
-        a_pos.setDuration(SHOW_ANIM_MS)
-        a_pos.setStartValue(start_pos)
-        a_pos.setEndValue(self._saved_pos)
-        a_pos.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        a_op = QPropertyAnimation(self.message_box, b"windowOpacity", self)
-        a_op.setDuration(SHOW_ANIM_MS)
-        a_op.setStartValue(0.0)
-        a_op.setEndValue(1.0)
-        a_op.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        self._show_group.addAnimation(a_pos)
-        self._show_group.addAnimation(a_op)
-        self._show_group.finished.connect(self._on_show_done)
-        self._show_group.start()
-
-    def _on_show_done(self) -> None:
-        self.message_box.setWindowOpacity(1.0)
-        self._anim_state = "idle"
-
-    def _animate_hide(self) -> None:
-        """向右滑动 + 淡出，视线自然被带到右侧边缘。"""
-        if self._anim_state != "idle":
-            return
-        self._anim_state = "hiding"
-        self._saved_pos = self.message_box.pos()
-
-        end_pos = self._saved_pos + QPoint(HIDE_SLIDE_PX, 0)
-
-        self._hide_group = QParallelAnimationGroup(self)
-
-        a_pos = QPropertyAnimation(self.message_box, b"pos", self)
-        a_pos.setDuration(HIDE_ANIM_MS)
-        a_pos.setStartValue(self._saved_pos)
-        a_pos.setEndValue(end_pos)
-        a_pos.setEasingCurve(QEasingCurve.Type.InCubic)
-
-        a_op = QPropertyAnimation(self.message_box, b"windowOpacity", self)
-        a_op.setDuration(HIDE_ANIM_MS)
-        a_op.setStartValue(1.0)
-        a_op.setEndValue(0.0)
-        a_op.setEasingCurve(QEasingCurve.Type.InCubic)
-
-        self._hide_group.addAnimation(a_pos)
-        self._hide_group.addAnimation(a_op)
-        self._hide_group.finished.connect(self._on_hide_done)
-        self._hide_group.start()
-
-    def _on_hide_done(self) -> None:
+    def hide_reminder(self) -> None:
+        """隐藏对话框（倒计时继续）。"""
         self.message_box.hide()
-        self.message_box.setWindowOpacity(1.0)
-        self.message_box.move(self._saved_pos)   # 静默复位，供下次动画使用
-        self._anim_state = "idle"
-        self._show_edge_indicator()
-
-    def _show_edge_indicator(self) -> None:
-        """让边缘条贴到屏幕右边缘，并淡入。"""
-        screen = self.message_box.screen() or QApplication.primaryScreen()
-        if screen is None:
-            return
-        geo = screen.availableGeometry()
-
-        # 关键：右侧 +0 边距，窗口最右一列像素正好压住屏幕最右一列
-        target_x = geo.right() - EDGE_WIDTH + 1
-        # 竖直居中
-        target_y = geo.top() + (geo.height() - EDGE_HEIGHT) // 2
-
-        self.edge_indicator.set_progress(self._progress_ratio())
-        self.edge_indicator.move(target_x, target_y)
-
-        # 淡入
-        self.edge_indicator.setWindowOpacity(0.0)
-        self.edge_indicator.show()
-        self.edge_indicator.raise_()
-
-        anim = QPropertyAnimation(self.edge_indicator, b"windowOpacity", self)
-        anim.setDuration(EDGE_ANIM_MS)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
-        self._edge_anim = anim
-
-    def _hide_edge_indicator(self) -> None:
-        """边缘条淡出后隐藏。"""
-        if not self.edge_indicator.isVisible():
-            return
-
-        anim = QPropertyAnimation(self.edge_indicator, b"windowOpacity", self)
-        anim.setDuration(EDGE_ANIM_MS)
-        anim.setStartValue(self.edge_indicator.windowOpacity())
-        anim.setEndValue(0.0)
-        anim.setEasingCurve(QEasingCurve.Type.InCubic)
-        anim.finished.connect(self._on_edge_hide_done)
-        anim.start()
-        self._edge_anim = anim
-
-    def _on_edge_hide_done(self) -> None:
-        self.edge_indicator.hide()
-        self.edge_indicator.setWindowOpacity(1.0)
-
-    def _progress_ratio(self) -> float:
-        if self.total <= 0:
-            return 0.0
-        return max(0.0, min(1.0, self.remaining / self.total))
 
     # ──────────────────────────────────────────────────────────────────────
     # 单实例消息处理
@@ -792,20 +520,18 @@ class MainWindow(QWidget):
         else:
             self.timer.stop()
             self.message_box.update_content(0, self.total)
-            self.edge_indicator.set_progress(0.0)
             shutdown_now()
 
     def _refresh_ui(self) -> None:
-        """把最新的剩余秒数同步到对话框和边缘条。"""
+        """把最新的剩余秒数同步到对话框。"""
         self.message_box.update_content(self.remaining, self.total)
-        self.edge_indicator.set_progress(self._progress_ratio())
 
     # ──────────────────────────────────────────────────────────────────────
     # 按钮回调
     # ──────────────────────────────────────────────────────────────────────
     def on_accept(self) -> None:
-        """“已阅”：隐藏窗口，倒计时继续，右侧出现边缘进度条。"""
-        self._animate_hide()
+        """“已阅”：关闭窗口，倒计时继续。"""
+        self.hide_reminder()
 
     def on_delay_clicked(self) -> None:
         """“延迟 1 分钟”：剩余时间和总时间都 +DELAY_S，窗口保持显示。"""
@@ -822,7 +548,6 @@ class MainWindow(QWidget):
         """“取消关机计划”：撤销系统关机命令，关闭窗口，稍后退出。"""
         cancel_shutdown()
         self.message_box.close()
-        self.edge_indicator.close()
         QTimer.singleShot(CLOSE_DELAY_MS, self._quit)
 
     # ──────────────────────────────────────────────────────────────────────
@@ -831,14 +556,13 @@ class MainWindow(QWidget):
     def _quit(self) -> None:
         """依次清理资源，最后退出应用。"""
         self.timer.stop()
-        self.edge_indicator.close()
         self.server.close()
         self._si.release()
         QApplication.quit()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 第 7 部分：main() —— 程序入口
+# 第 6 部分：main() —— 程序入口
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
@@ -869,7 +593,7 @@ def main() -> None:
     # ---- 4. 创建主窗口 ----
     window = MainWindow(args.countdown, si)
 
-    # ---- 5. 播放启动音效（Windows 11 UAC）----
+    # ---- 5. 播放启动音效 ----
     play_startup_sound()
 
     # ---- 6. 进入事件循环 ----
