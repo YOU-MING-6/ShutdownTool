@@ -4,20 +4,19 @@ ShutdownTool — 基于 PySide6 + QFluentWidgets 的定时关机提示工具
 【这个程序是做什么的？】
     启动后，屏幕中央会弹出一个窗口，提示“计算机将在 XX 后自动关闭”。
     用户可以：
-        · 点“已阅”        → 窗口滑出，倒计时继续；右下角出现圆形悬浮倒计时
+        · 点“已阅”        → 窗口向下淡出，倒计时继续；右下角出现圆形悬浮倒计时
         · 点“延迟 1 分钟” → 倒计时 +60 秒，窗口不关闭
         · 点“立即关机”    → 立即执行关机
         · 点“取消关机计划” → 撤销关机，退出程序
         · 点圆形悬浮倒计时 → 重新显示窗口
         · 拖动圆形悬浮倒计时 → 可移动到屏幕任意位置
-    窗口隐藏时向右滑动 + 淡出；显示时反向滑入。
 
 【代码结构】
     第 1 部分  Config              — 所有可调参数集中在此
     第 2 部分  Utils               — 通用工具函数（含启动音效）
     第 3 部分  SingleInstance      — 保证只运行一个实例
     第 4 部分  ShutdownMessageBox  — 弹窗 UI
-    第 5 部分  CircularIndicator   — 圆形悬浮倒计时（基于 ProgressRing）
+    第 5 部分  CircularIndicator   — 圆形悬浮倒计时
     第 6 部分  MainWindow          — 主控制器
     第 7 部分  main()              — 程序入口
 """
@@ -77,7 +76,7 @@ INNER_RADIUS = RADIUS - 1
 
 # ---------- 圆形悬浮倒计时 ----------
 CIRCLE_SIZE          = 84       # 整个圆控件的直径
-CIRCLE_RING          = 6        # 圆环线宽（对应 ProgressRing.strokeWidth）
+CIRCLE_RING          = 6        # 圆环线宽
 CIRCLE_MARGIN_RIGHT  = 40       # 默认距屏幕右边的距离
 CIRCLE_MARGIN_BOTTOM = 80       # 默认距屏幕底边的距离
 CIRCLE_FADE_MS       = 220      # 悬浮圆淡入淡出时长
@@ -87,9 +86,10 @@ CIRCLE_FILL_LIGHT = "#FFFFFF"
 CIRCLE_FILL_DARK  = "#2B2B2B"
 
 # ---------- 窗口隐藏 / 显示动画 ----------
-HIDE_ANIM_MS  = 260
-SHOW_ANIM_MS  = 260
-HIDE_SLIDE_PX = 140
+# 竖直方向滑动：隐藏时向下、显示时从下方滑入
+HIDE_ANIM_MS   = 260
+SHOW_ANIM_MS   = 260
+HIDE_SLIDE_PX  = 120    # 竖直滑动距离
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -213,18 +213,6 @@ class SingleInstance:
 # ══════════════════════════════════════════════════════════════════════════════
 # 第 4 部分：ShutdownMessageBox —— 弹窗 UI
 # ══════════════════════════════════════════════════════════════════════════════
-# 【视觉结构】
-#
-# ┌─────────────────────────────────────────────┐
-# │  要关机吗？                                  │
-# │  xxxxx；计算机将在…                          │ ← contentFrame（纯白）
-# │  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░    │
-# ├─────────────────────────────────────────────┤ ← 1px 分隔线
-# │ [已阅][延迟 1 分钟][立即关机]   [取消关机计划] │
-# │                                             │ ← buttonFrame（浅灰）
-# └─────────────────────────────────────────────┘
-#
-# ──────────────────────────────────────────────────────────────────────────────
 
 class ShutdownMessageBox(QWidget):
     """关机提示对话框。"""
@@ -244,9 +232,6 @@ class ShutdownMessageBox(QWidget):
         self._apply_style()
         self.update_content()
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 窗口构建
-    # ──────────────────────────────────────────────────────────────────────
     def _setup_window(self) -> None:
         """创建最外层的窗口和圆角背景容器。"""
         self.setWindowFlags(
@@ -254,13 +239,11 @@ class ShutdownMessageBox(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
-        # 外层布局，留出阴影边距
         outer = QVBoxLayout(self)
         outer.setContentsMargins(
             SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN, SHADOW_MARGIN
         )
 
-        # 圆角容器
         self.container = QFrame(self)
         self.container.setObjectName("shutdownContainer")
         self.container.setAttribute(Qt.WA_StyledBackground, True)
@@ -268,25 +251,21 @@ class ShutdownMessageBox(QWidget):
         self._attach_shadow()
         outer.addWidget(self.container)
 
-        # container 内部：上下两块
         main_layout = QVBoxLayout(self.container)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 内容区
         self.contentFrame = QFrame(self.container)
         self.contentFrame.setObjectName("contentFrame")
         self.contentFrame.setAttribute(Qt.WA_StyledBackground, True)
         main_layout.addWidget(self.contentFrame)
 
-        # 按钮区
         self.buttonFrame = QFrame(self.container)
         self.buttonFrame.setObjectName("buttonFrame")
         self.buttonFrame.setAttribute(Qt.WA_StyledBackground, True)
         main_layout.addWidget(self.buttonFrame)
 
     def _attach_shadow(self) -> None:
-        """给 container 添加柔和阴影。"""
         shadow = QGraphicsDropShadowEffect(self.container)
         shadow.setBlurRadius(SHADOW_BLUR)
         shadow.setOffset(0, SHADOW_OFFSET_Y)
@@ -294,7 +273,6 @@ class ShutdownMessageBox(QWidget):
         self.container.setGraphicsEffect(shadow)
 
     def _apply_style(self) -> None:
-        """根据当前主题应用配色样式。"""
         if isDarkTheme():
             container_bg = "#2B2B2B"
             container_border = "#3A3A3A"
@@ -323,11 +301,7 @@ class ShutdownMessageBox(QWidget):
             }}
         """)
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 内容与按钮
-    # ──────────────────────────────────────────────────────────────────────
     def _setup_content(self) -> None:
-        """构建上半部分：标题、描述、进度条。"""
         layout = QVBoxLayout(self.contentFrame)
         layout.setSpacing(8)
         layout.setContentsMargins(24, 24, 24, 20)
@@ -344,7 +318,6 @@ class ShutdownMessageBox(QWidget):
         layout.addWidget(self.progressBar)
 
     def _setup_buttons(self) -> None:
-        """构建下半部分：四个操作按钮。"""
         self.accept_btn = PrimaryPushButton(
             FluentIcon.ACCEPT, "已阅", self.buttonFrame
         )
@@ -367,13 +340,9 @@ class ShutdownMessageBox(QWidget):
         row.addStretch(1)
         row.addWidget(self.cancel_btn)
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 内容与进度更新
-    # ──────────────────────────────────────────────────────────────────────
     def update_content(
         self, remaining: int | None = None, total: int | None = None
     ) -> None:
-        """刷新显示的剩余时间和进度条。"""
         if remaining is not None:
             self.remaining = remaining
         if total is not None:
@@ -385,13 +354,11 @@ class ShutdownMessageBox(QWidget):
         self._animate_progress(self._target_progress())
 
     def _target_progress(self) -> int:
-        """计算进度条目标百分比（0-100 的整数）。"""
         if self.total <= 0:
             return 0
         return max(0, min(100, round(self.remaining * 100 / self.total)))
 
     def _animate_progress(self, target: int) -> None:
-        """让进度条在 TICK_MS 毫秒内平滑过渡到目标值。"""
         if self._progress_anim is None:
             self._progress_anim = QVariantAnimation(self)
             self._progress_anim.setEasingCurve(QEasingCurve.Type.Linear)
@@ -404,11 +371,7 @@ class ShutdownMessageBox(QWidget):
         self._progress_anim.setEndValue(target)
         self._progress_anim.start()
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 拖动窗口
-    # ──────────────────────────────────────────────────────────────────────
     def mousePressEvent(self, event) -> None:
-        """鼠标按下时记录光标相对窗口左上角的偏移。"""
         if event.button() == Qt.LeftButton:
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -416,74 +379,69 @@ class ShutdownMessageBox(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
-        """按住鼠标移动时，把窗口移动到新位置。"""
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        """松开鼠标结束拖动。"""
         self._drag_offset = None
         super().mouseReleaseEvent(event)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 第 5 部分：CircularIndicator —— 圆形悬浮倒计时（基于 ProgressRing）
+# 第 5 部分：CircularIndicator —— 圆形悬浮倒计时
 # ══════════════════════════════════════════════════════════════════════════════
-# 【设计】
-#   直接继承 qfluentwidgets 的 ProgressRing：
-#       · 圆环的描边、圆角端帽、主题色、平滑动画，全部由 ProgressRing 负责
-#       · 圆环颜色自动跟随 setThemeColor()，即系统强调色
-#       · 轨道颜色自动跟随主题（浅色 / 深色）
-#   我们只在它基础上：
-#       · 加一层内部纯色填充（与弹窗背景一致）
-#       · 在中心绘制电源图标 + 剩余时间文字
-#       · 覆盖鼠标事件，实现“拖动 / 单击”
+# 【布局设计】
 #
-# 【视觉结构】
+#   ┌─────────────────────┐
+#   │       ╭────╮         │  ← 圆环外缘
+#   │     ╱        ╲       │
+#   │    │   ⏻     │       │  ← 图标：居中偏上，尺寸约 26% 直径
+#   │    │         │       │     图标与下方文字间距很小，视觉上是一组
+#   │    │  3:25   │       │  ← 时间：9pt 加粗，紧贴图标下方
+#   │     ╲        ╱       │
+#   │       ╰────╯         │
+#   └─────────────────────┘
 #
-#        ╭───────╮
-#      ╱           ╲
-#     │    ⏻        │   ← 中心：FluentIcon.POWER_BUTTON
-#     │   3:25      │   ← 中心：剩余时间 mm:ss
-#      ╲           ╱
-#        ╰───────╯
-#       ↑         ↑
-#       |         └── 剩余部分：系统强调色，从顶部顺时针
-#       └──────────── 轨道：跟随主题的灰
-#
-# 交互：
-#   · 拖动 → 移动位置
-#   · 单击（未移动）→ 发出 clicked 信号
+#   整体（图标 + 文字）在圆内垂直居中，视觉重心略偏上。
+#   图标与文字之间的间距由 ICON_TEXT_GAP 控制。
 #
 # ──────────────────────────────────────────────────────────────────────────────
 
 class CircularIndicator(ProgressRing):
     """
-    圆形悬浮倒计时。
-    继承 qfluentwidgets.ProgressRing，复用其圆环渲染、主题色、平滑动画。
+    圆形悬浮倒计时，继承 qfluentwidgets.ProgressRing。
+    圆环由 ProgressRing 全权渲染（主题色 / 轨道色 / 平滑动画），
+    本类只负责：
+        · 内部纯色填充
+        · 中心图标 + 剩余时间
+        · 拖动 / 单击交互
     """
 
     clicked = Signal()
 
+    # ---- 中心布局参数（相对于控件直径的比例）----
+    ICON_RATIO      = 0.30      # 图标大小 ÷ 直径
+    ICON_TEXT_GAP   = 4         # 图标与文字之间的间距（像素）
+    TEXT_FONT_SIZE  = 10        # 时间文字字号
+    TEXT_HEIGHT     = 16        # 时间文字占用的高度（像素）
+    VISUAL_Y_BIAS   = -2        # 整体上移一点，视觉更居中
+
     def __init__(self) -> None:
         super().__init__()
 
-        # ---- 窗口标志：置顶 / 无边框 / 不抢焦点 ----
         self.setWindowFlags(
             Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
 
-        # ---- 尺寸与外观 ----
         self.setFixedSize(CIRCLE_SIZE, CIRCLE_SIZE)
         self.setStrokeWidth(CIRCLE_RING)
-        self.setTextVisible(False)                 # 隐藏默认的百分比文字
+        self.setTextVisible(False)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("点击重新显示关机提示，拖动可移动位置")
 
-        # ---- 主题相关（启动时快照一次）----
         dark = isDarkTheme()
         self._fill_color = QColor(CIRCLE_FILL_DARK if dark else CIRCLE_FILL_LIGHT)
         self._fg_color = QColor("#FFFFFF" if dark else "#000000")
@@ -491,25 +449,21 @@ class CircularIndicator(ProgressRing):
             Theme.DARK if dark else Theme.LIGHT
         )
 
-        # ---- 状态 ----
         self._remaining_text = "0:00"
 
-        # ---- 拖动状态 ----
-        self._press_global = None       # 按下时光标的全局坐标
-        self._drag_offset = None        # 光标相对控件左上角的偏移
-        self._moved = False             # 本次按下是否产生过拖动
+        self._press_global = None
+        self._drag_offset = None
+        self._moved = False
 
     # ---------- 对外接口 ----------
     def set_progress(self, ratio: float) -> None:
-        """ratio = 剩余时间 / 总时间，0.0 ~ 1.0（内部转换为 0~100）。"""
         ratio = max(0.0, min(1.0, ratio))
         v = int(round(ratio * 100))
         if self.value() == v:
             return
-        self.setValue(v)                # ProgressRing 会平滑过渡
+        self.setValue(v)
 
     def set_remaining(self, seconds: int) -> None:
-        """更新中心显示的剩余时间文本。"""
         text = format_time_short(seconds)
         if text == self._remaining_text:
             return
@@ -545,7 +499,7 @@ class CircularIndicator(ProgressRing):
 
     # ---------- 绘制 ----------
     def paintEvent(self, event):
-        # 1) 内部填充：一个跟弹窗背景同色的实心圆
+        # 1) 内部填充：跟弹窗背景同色的实心圆
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setPen(Qt.NoPen)
@@ -556,28 +510,41 @@ class CircularIndicator(ProgressRing):
         )
         p.end()
 
-        # 2) 圆环（ProgressRing 全权负责：主题色 + 轨道色 + 平滑动画）
+        # 2) 圆环（ProgressRing 全权负责）
         super().paintEvent(event)
 
-        # 3) 中心图标 + 剩余时间文字
+        # 3) 中心图标 + 时间文字（整体在圆内垂直居中，略偏上）
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
 
         w, h = self.width(), self.height()
-        icon_size = int(w * 0.30)
+
+        # 图标尺寸
+        icon_size = int(w * self.ICON_RATIO)
+        # 整组（图标 + 间距 + 文字）的总高
+        block_h = icon_size + self.ICON_TEXT_GAP + self.TEXT_HEIGHT
+        # 整组在圆内垂直居中（加上视觉偏移）
+        block_top = (h - block_h) // 2 + self.VISUAL_Y_BIAS
+
         icon_x = (w - icon_size) // 2
-        icon_y = int(h * 0.24)
+        icon_y = block_top
         self._icon.paint(p, icon_x, icon_y, icon_size, icon_size)
 
+        # 时间文字
         p.setPen(self._fg_color)
         f = QFont(self.font())
-        f.setPointSize(9)
+        f.setPointSize(self.TEXT_FONT_SIZE)
         f.setBold(True)
         p.setFont(f)
-        text_rect = QRectF(0, icon_y + icon_size - 2, w, 20)
+        text_rect = QRectF(
+            0,
+            block_top + icon_size + self.ICON_TEXT_GAP,
+            w,
+            self.TEXT_HEIGHT,
+        )
         p.drawText(
             text_rect,
-            Qt.AlignHCenter | Qt.AlignTop,
+            Qt.AlignHCenter | Qt.AlignVCenter,
             self._remaining_text,
         )
         p.end()
@@ -592,38 +559,31 @@ class MainWindow(QWidget):
 
     def __init__(self, countdown: int, single_instance: SingleInstance) -> None:
         super().__init__()
-        # ---- 状态 ----
         self._si = single_instance
         self.remaining = countdown
         self.total = countdown
-        self._saved_pos = None           # 弹窗“正常显示”时的位置
-        self._anim_state = "idle"        # idle / showing / hiding
+        self._saved_pos = None
+        self._anim_state = "idle"
         self._show_group = None
         self._hide_group = None
         self._circle_anim = None
-        self._circle_placed = False      # 悬浮圆是否已经放到默认位置
+        self._circle_placed = False
 
-        # ---- 宿主窗口（不可见）----
         self.setWindowFlags(Qt.Tool)
         self.resize(1, 1)
 
-        # ---- 主题（只在启动时应用一次）----
         self._apply_theme()
-
-        # ---- UI 组件 ----
         self._setup_message_box(countdown)
         self._setup_circular_indicator()
         self._setup_single_instance_server()
         self._setup_timer()
 
-        # ---- 首次显示 ----
         self.show_reminder()
 
     # ──────────────────────────────────────────────────────────────────────
     # 主题
     # ──────────────────────────────────────────────────────────────────────
     def _apply_theme(self) -> None:
-        """应用主题：根据启动时的系统状态选择深浅色。"""
         setTheme(Theme.AUTO)
         if sys.platform in ("win32", "darwin"):
             setThemeColor(getSystemAccentColor(), save=False)
@@ -632,7 +592,6 @@ class MainWindow(QWidget):
     # 组件初始化
     # ──────────────────────────────────────────────────────────────────────
     def _setup_message_box(self, countdown: int) -> None:
-        """创建对话框并连接按钮信号。"""
         self.message_box = ShutdownMessageBox(countdown)
         self.message_box.accept_btn.clicked.connect(self.on_accept)
         self.message_box.shutdown_btn.clicked.connect(self.on_shutdown_now)
@@ -640,20 +599,17 @@ class MainWindow(QWidget):
         self.message_box.cancel_btn.clicked.connect(self.cancel_shutdown)
 
     def _setup_circular_indicator(self) -> None:
-        """创建圆形悬浮倒计时，点击它重新显示窗口。"""
         self.circular = CircularIndicator()
         self.circular.clicked.connect(self.show_reminder)
         self.circular.hide()
 
     def _setup_single_instance_server(self) -> None:
-        """启动本地 socket 服务，接收其他实例的唤醒请求。"""
         self.server = QLocalServer(self)
         self.server.removeServer(SOCKET_NAME)
         self.server.listen(SOCKET_NAME)
         self.server.newConnection.connect(self._on_new_connection)
 
     def _setup_timer(self) -> None:
-        """启动倒计时定时器。"""
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
         self.timer.start(TICK_MS)
@@ -662,7 +618,7 @@ class MainWindow(QWidget):
     # 显示 / 隐藏窗口
     # ──────────────────────────────────────────────────────────────────────
     def show_reminder(self) -> None:
-        """显示并置顶对话框（带从右滑入 + 淡入动画）。"""
+        """显示并置顶对话框（从下方滑入 + 淡入）。"""
         if self._anim_state == "showing":
             return
         if self.message_box.isVisible() and self._anim_state == "idle":
@@ -672,10 +628,10 @@ class MainWindow(QWidget):
         self._animate_show()
 
     # ──────────────────────────────────────────────────────────────────────
-    # 显示 / 隐藏动画
+    # 显示 / 隐藏动画（竖直方向）
     # ──────────────────────────────────────────────────────────────────────
     def _animate_show(self) -> None:
-        """弹窗从右侧滑入 + 淡入；同时把悬浮圆淡出。"""
+        """弹窗从下方滑入 + 淡入；同时把悬浮圆淡出。"""
         self._anim_state = "showing"
         self._hide_circular()
 
@@ -683,7 +639,8 @@ class MainWindow(QWidget):
             center_on_screen(self.message_box)
             self._saved_pos = self.message_box.pos()
 
-        start_pos = self._saved_pos + QPoint(HIDE_SLIDE_PX, 0)
+        # 起点：比目标位置低 HIDE_SLIDE_PX 像素
+        start_pos = self._saved_pos + QPoint(0, HIDE_SLIDE_PX)
 
         self.message_box.move(start_pos)
         self.message_box.setWindowOpacity(0.0)
@@ -715,13 +672,14 @@ class MainWindow(QWidget):
         self._anim_state = "idle"
 
     def _animate_hide(self) -> None:
-        """弹窗向右滑出 + 淡出；结束后显示悬浮圆。"""
+        """弹窗向下滑出 + 淡出；结束后显示悬浮圆。"""
         if self._anim_state != "idle":
             return
         self._anim_state = "hiding"
         self._saved_pos = self.message_box.pos()
 
-        end_pos = self._saved_pos + QPoint(HIDE_SLIDE_PX, 0)
+        # 终点：比原位置低 HIDE_SLIDE_PX 像素
+        end_pos = self._saved_pos + QPoint(0, HIDE_SLIDE_PX)
 
         self._hide_group = QParallelAnimationGroup(self)
 
@@ -753,7 +711,6 @@ class MainWindow(QWidget):
     # 悬浮圆：定位、出现、消失
     # ──────────────────────────────────────────────────────────────────────
     def _default_circle_pos(self) -> QPoint:
-        """计算右下角的默认位置（仅在首次显示时使用）。"""
         screen = self.message_box.screen() or QApplication.primaryScreen()
         if screen is None:
             return QPoint(0, 0)
@@ -764,12 +721,10 @@ class MainWindow(QWidget):
         )
 
     def _show_circular(self) -> None:
-        """让悬浮圆淡入；首次显示时先放到右下角默认位置。"""
         if not self._circle_placed:
             self.circular.move(self._default_circle_pos())
             self._circle_placed = True
 
-        # 同步最新状态
         self.circular.set_progress(self._progress_ratio())
         self.circular.set_remaining(self.remaining)
 
@@ -786,7 +741,6 @@ class MainWindow(QWidget):
         self._circle_anim = anim
 
     def _hide_circular(self) -> None:
-        """让悬浮圆淡出后隐藏。"""
         if not self.circular.isVisible():
             return
 
@@ -812,7 +766,6 @@ class MainWindow(QWidget):
     # 单实例消息处理
     # ──────────────────────────────────────────────────────────────────────
     def _on_new_connection(self) -> None:
-        """有新的程序实例启动并尝试连接时触发。"""
         sock = self.server.nextPendingConnection()
         if not sock:
             return
@@ -825,7 +778,6 @@ class MainWindow(QWidget):
     # 倒计时逻辑
     # ──────────────────────────────────────────────────────────────────────
     def _tick(self) -> None:
-        """每秒触发一次：剩余秒数减 1，刷新 UI 或执行关机。"""
         self.remaining -= 1
         if self.remaining > 0:
             self._refresh_ui()
@@ -837,7 +789,6 @@ class MainWindow(QWidget):
             shutdown_now()
 
     def _refresh_ui(self) -> None:
-        """把最新的剩余秒数同步到对话框和悬浮圆。"""
         self.message_box.update_content(self.remaining, self.total)
         self.circular.set_progress(self._progress_ratio())
         self.circular.set_remaining(self.remaining)
@@ -846,22 +797,19 @@ class MainWindow(QWidget):
     # 按钮回调
     # ──────────────────────────────────────────────────────────────────────
     def on_accept(self) -> None:
-        """“已阅”：隐藏窗口，倒计时继续，右下角出现悬浮圆。"""
+        """“已阅”：向下隐藏窗口，倒计时继续，右下角出现悬浮圆。"""
         self._animate_hide()
 
     def on_delay_clicked(self) -> None:
-        """“延迟 1 分钟”：剩余时间和总时间都 +DELAY_S，窗口保持显示。"""
         self.remaining += DELAY_S
         self.total += DELAY_S
         self._refresh_ui()
 
     def on_shutdown_now(self) -> None:
-        """“立即关机”：停止倒计时，延迟几秒后关机。"""
         self.timer.stop()
         shutdown_now(SHUTDOWN_BUFFER_S)
 
     def cancel_shutdown(self) -> None:
-        """“取消关机计划”：撤销系统关机命令，关闭窗口，稍后退出。"""
         cancel_shutdown()
         self.message_box.close()
         self.circular.close()
@@ -871,7 +819,6 @@ class MainWindow(QWidget):
     # 退出清理
     # ──────────────────────────────────────────────────────────────────────
     def _quit(self) -> None:
-        """依次清理资源，最后退出应用。"""
         self.timer.stop()
         self.circular.close()
         self.server.close()
@@ -885,7 +832,6 @@ class MainWindow(QWidget):
 
 def main() -> None:
     """程序主入口。"""
-    # ---- 1. 解析命令行参数 ----
     parser = argparse.ArgumentParser(description=APP_DESCRIPTION)
     parser.add_argument(
         "--countdown",
@@ -898,23 +844,16 @@ def main() -> None:
         print("错误：--countdown 必须为大于 0 的整数")
         sys.exit(1)
 
-    # ---- 2. 创建 QApplication ----
     app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)   # 窗口全隐藏时不退出
+    app.setQuitOnLastWindowClosed(False)
 
-    # ---- 3. 单实例检查 ----
     si = SingleInstance()
     if not si.acquire():
         si.notify_show()
         sys.exit(0)
 
-    # ---- 4. 创建主窗口 ----
     window = MainWindow(args.countdown, si)
-
-    # ---- 5. 播放启动音效 ----
     play_startup_sound()
-
-    # ---- 6. 进入事件循环 ----
     sys.exit(app.exec())
 
 
