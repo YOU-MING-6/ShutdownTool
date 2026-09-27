@@ -111,9 +111,9 @@ class CircleStyle:
     FILL_LIGHT: Final = "#FFFFFF"
     FILL_DARK: Final = "#2B2B2B"
     # 中心布局比例
-    ICON_RATIO: Final = 0.20
+    ICON_RATIO: Final = 0.23
     ICON_TEXT_GAP: Final = 4
-    TEXT_FONT_SIZE: Final = 10
+    TEXT_FONT_SIZE: Final = 12
     TEXT_HEIGHT: Final = 16
     VISUAL_Y_BIAS: Final = -2
 
