@@ -109,7 +109,7 @@ class CircleStyle:
     """圆形悬浮倒计时外观常量。"""
 
     SIZE: Final = 88
-    RING: Final = 8
+    RING: Final = 6
     MARGIN_RIGHT: Final = 40
     MARGIN_BOTTOM: Final = 80
     FADE_MS: Final = 220
@@ -357,7 +357,7 @@ class ShutdownDialog(QWidget):
         self.cancel_btn.clicked.connect(self.cancelled.emit)
 
         row = QHBoxLayout(self.button_frame)
-        row.setContentsMargins(24, 16, 24, 20)
+        row.setContentsMargins(24, 24, 24, 24)
         row.setSpacing(8)
         row.addWidget(self.accept_btn)
         row.addWidget(self.delay_btn)
