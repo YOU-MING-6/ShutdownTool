@@ -10,6 +10,10 @@
 圆形悬浮倒计时支持：
     · 单击重新显示弹窗
     · 拖动到屏幕任意位置
+
+命令行参数：
+    --time  <seconds>   倒计时秒数（默认 60）
+    --title <text>      弹窗正文前缀（默认空），例如 "当前为放学时段；"
 """
 
 from __future__ import annotations
@@ -74,7 +78,8 @@ class AppMeta:
     DESCRIPTION: Final = "定时关机提示工具"
     SOCKET_NAME: Final = f"{ID}_socket"
     LOCK_FILE: Final = f"{ID}.lock"
-    DEFAULT_COUNTDOWN: Final = 15
+    DEFAULT_COUNTDOWN: Final = 60      # 默认倒计时时长（秒）
+    DEFAULT_TITLE: Final = ""          # 默认副标题前缀（空）
 
 
 class Timing:
@@ -246,6 +251,9 @@ class ShutdownDialog(QWidget):
     """无边框圆角关机提示对话框。
 
     对外暴露四个语义化信号，避免外部直接访问内部按钮。
+
+    :param countdown:   初始剩余秒数，同时作为进度条基准
+    :param title_prefix: 正文前缀（可空）。为空时不显示前缀。
     """
 
     accepted = Signal()
@@ -253,10 +261,11 @@ class ShutdownDialog(QWidget):
     shutdown_requested = Signal()
     cancelled = Signal()
 
-    def __init__(self, countdown: int) -> None:
+    def __init__(self, countdown: int, title_prefix: str = "") -> None:
         super().__init__()
         self.remaining = countdown
         self.total = countdown
+        self.title_prefix = title_prefix or ""
 
         self._drag_offset: QPoint | None = None
         self._progress_anim: QVariantAnimation | None = None
@@ -382,6 +391,11 @@ class ShutdownDialog(QWidget):
         """)
 
     # ---------- 内容更新 ----------
+    def set_title_prefix(self, text: str) -> None:
+        """更新正文前缀并立即刷新显示。"""
+        self.title_prefix = text or ""
+        self.update_content()
+
     def update_content(
         self,
         remaining: int | None = None,
@@ -392,10 +406,11 @@ class ShutdownDialog(QWidget):
         if total is not None:
             self.total = total
 
-        self.content_label.setText(
-            f"当前为放学时段；计算机将在 "
-            f"{format_duration(self.remaining)}后自动关闭。"
-        )
+        body = f"计算机将在 {format_duration(self.remaining)}后自动关闭。"
+        if self.title_prefix:
+            body = f"{self.title_prefix}{body}"
+
+        self.content_label.setText(body)
         self._animate_progress(self._target_progress())
 
     def _target_progress(self) -> int:
@@ -574,13 +589,24 @@ class CircularIndicator(ProgressRing):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ShutdownController(QObject):
-    """中枢控制器：串联对话框、悬浮圆、定时器与单实例服务。"""
+    """中枢控制器：串联对话框、悬浮圆、定时器与单实例服务。
 
-    def __init__(self, countdown: int, single_instance: SingleInstance) -> None:
+    :param countdown:    初始剩余秒数
+    :param title_prefix: 弹窗正文前缀（可空）
+    :param single_instance: 单实例控制器（退出时释放）
+    """
+
+    def __init__(
+        self,
+        countdown: int,
+        title_prefix: str,
+        single_instance: SingleInstance,
+    ) -> None:
         super().__init__()
         self._si = single_instance
         self._remaining = countdown
         self._total = countdown
+        self._title_prefix = title_prefix or ""
         self._dialog_anchor: QPoint | None = None
         self._anim_state: AnimationState = AnimationState.IDLE
 
@@ -604,7 +630,7 @@ class ShutdownController(QObject):
             setThemeColor(getSystemAccentColor(), save=False)
 
     def _create_dialog(self, countdown: int) -> None:
-        self.dialog = ShutdownDialog(countdown)
+        self.dialog = ShutdownDialog(countdown, self._title_prefix)
         self.dialog.accepted.connect(self._on_accepted)
         self.dialog.delayed.connect(self._on_delayed)
         self.dialog.shutdown_requested.connect(self._on_shutdown_now)
@@ -857,20 +883,31 @@ class ShutdownController(QObject):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=AppMeta.DESCRIPTION)
+    parser = argparse.ArgumentParser(
+        description=AppMeta.DESCRIPTION,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
-        "--countdown",
+        "--time",
         type=int,
         default=AppMeta.DEFAULT_COUNTDOWN,
-        help="默认倒计时时长（秒）",
+        metavar="SECONDS",
+        help="倒计时时长（秒）",
+    )
+    parser.add_argument(
+        "--title",
+        type=str,
+        default=AppMeta.DEFAULT_TITLE,
+        metavar="TEXT",
+        help="弹窗正文前缀（例如 \"当前为放学时段；\"），为空则不显示前缀",
     )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    if args.countdown <= 0:
-        print("错误：--countdown 必须为大于 0 的整数", file=sys.stderr)
+    if args.time <= 0:
+        print("错误：--time 必须为大于 0 的整数", file=sys.stderr)
         sys.exit(1)
 
     app = QApplication(sys.argv)
@@ -881,7 +918,7 @@ def main() -> None:
         si.notify_existing()
         sys.exit(0)
 
-    controller = ShutdownController(args.countdown, si)  # noqa: F841
+    controller = ShutdownController(args.time, args.title, si)  # noqa: F841
     play_startup_sound()
 
     sys.exit(app.exec())
