@@ -98,29 +98,28 @@ class DialogStyle:
 
     WIDTH: Final = 600
     RADIUS: Final = 8
-    INNER_RADIUS: Final = RADIUS - 1
-    SHADOW_MARGIN: Final = 24
-    SHADOW_BLUR: Final = 24
-    SHADOW_OFFSET_Y: Final = 4
-    SHADOW_COLOR: Final = QColor(0, 0, 0, 90)
+    INNER_RADIUS: Final = 8
+    SHADOW_MARGIN: Final = 32
+    SHADOW_BLUR: Final = 32
+    SHADOW_OFFSET_Y: Final = 6
+    SHADOW_COLOR: Final = QColor(0, 0, 0, 80)
 
 
 class CircleStyle:
     """圆形悬浮倒计时外观常量。"""
 
-    SIZE: Final = 84
-    RING: Final = 6
+    SIZE: Final = 88
+    RING: Final = 8
     MARGIN_RIGHT: Final = 40
     MARGIN_BOTTOM: Final = 80
     FADE_MS: Final = 220
     FILL_LIGHT: Final = "#FFFFFF"
     FILL_DARK: Final = "#2B2B2B"
-    # 中心布局比例
-    ICON_RATIO: Final = 0.23
+    ICON_RATIO: Final = 0.25
     ICON_TEXT_GAP: Final = 4
     TEXT_FONT_SIZE: Final = 12
     TEXT_HEIGHT: Final = 16
-    VISUAL_Y_BIAS: Final = -2
+    VISUAL_Y_BIAS: Final = 0
 
 
 class AnimSpec:
@@ -333,8 +332,9 @@ class ShutdownDialog(QWidget):
         self.progress_bar.setValue(100)
 
         layout.addWidget(self.title_label)
+        layout.addSpacing(12)
         layout.addWidget(self.content_label)
-        layout.addSpacing(4)
+        layout.addSpacing(16)
         layout.addWidget(self.progress_bar)
 
     def _init_buttons(self) -> None:
@@ -357,7 +357,7 @@ class ShutdownDialog(QWidget):
         self.cancel_btn.clicked.connect(self.cancelled.emit)
 
         row = QHBoxLayout(self.button_frame)
-        row.setContentsMargins(24, 16, 24, 16)
+        row.setContentsMargins(24, 16, 24, 20)
         row.setSpacing(8)
         row.addWidget(self.accept_btn)
         row.addWidget(self.delay_btn)
